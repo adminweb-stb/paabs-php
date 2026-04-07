@@ -171,8 +171,8 @@ $activeFilters = (int)($search !== '') + (int)($status !== '');
     </nav>
 
     <?php
-    // Sapaan berdasarkan waktu (WIB UTC+7)
-    $hour = (int)date('H', time() + 7*3600);
+    // Sapaan berdasarkan waktu (Timezone Jakarta)
+    $hour = (int)date('H');
     if ($hour >= 5  && $hour < 12) $greeting = 'Selamat Pagi';
     elseif ($hour >= 12 && $hour < 15) $greeting = 'Selamat Siang';
     elseif ($hour >= 15 && $hour < 19) $greeting = 'Selamat Sore';

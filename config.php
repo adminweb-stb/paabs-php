@@ -1,4 +1,7 @@
 <?php
+// Set Timezone ke Waktu Indonesia Barat (Jakarta)
+date_default_timezone_set('Asia/Jakarta');
+
 // config.php - Professional Instrument Edition
 // PENTING: Ubah bagian di bawah ini saat mengunggah ke HOSTING!
 $host = 'localhost'; // Ganti dengan host database hosting (biasanya localhost)
