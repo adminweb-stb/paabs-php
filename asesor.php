@@ -182,7 +182,7 @@ $activeFilters = (int)($search !== '') + (int)($status !== '');
 
     // Pesan motivasi kontekstual
     if ($total === 0) {
-        $motivation = 'Belum ada siswa yang ditugaskan. Hubungi admin untuk memulai.';
+        $motivation = 'Belum ada jadwal asesment hari ini. Silakan cek di hari lain.';
     } elseif ($doneCount === 0) {
         $motivation = 'Yuk mulai! Selesaikan penilaian untuk semua siswa yang telah ditugaskan.';
     } elseif ($doneCount === $total) {
