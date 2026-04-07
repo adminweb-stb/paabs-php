@@ -65,11 +65,62 @@ $scoreLabels = ['Tidak Ada', 'Kurang', 'Cukup', 'Baik', 'Sangat Baik'];
     <script src="https://unpkg.com/lucide@latest" defer></script>
     <style>
         body { font-family: 'Nunito', sans-serif; }
-        /* Focus visible untuk aksesibilitas keyboard */
         :focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; border-radius: 6px; }
-        /* Highlight pertanyaan yang belum dijawab (validasi) */
         .question-error { ring: 2px; --tw-ring-color: #f87171; }
         .score-legend span { font-size: 10px; line-height: 1.2; }
+
+        /* ── Auto-save indicator ─────────────────────────── */
+        #autosaveBar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 12px;
+            border-radius: 20px;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+        #autosaveBar.state-idle    { background: #f1f5f9; color: #94a3b8; }
+        #autosaveBar.state-saving  { background: #eff6ff; color: #3b82f6; }
+        #autosaveBar.state-saved   { background: #f0fdf4; color: #16a34a; }
+        #autosaveBar.state-error   { background: #fef2f2; color: #dc2626; }
+        #autosaveBar .dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: currentColor;
+            flex-shrink: 0;
+        }
+        #autosaveBar.state-saving .dot {
+            animation: pulse-dot 1s ease-in-out infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50%       { opacity: 0.4; transform: scale(0.7); }
+        }
+
+        /* Animasi card berhasil disimpan */
+        .card-saved-flash {
+            animation: saved-flash 0.6s ease;
+        }
+        @keyframes saved-flash {
+            0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.5); }
+            50%  { box-shadow: 0 0 0 6px rgba(34,197,94,0.15); }
+            100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+        }
+
+        /* Session expired overlay */
+        #sessionExpiredOverlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15,23,42,0.85);
+            backdrop-filter: blur(6px);
+            z-index: 9999;
+            align-items: center;
+            justify-content: center;
+        }
+        #sessionExpiredOverlay.show { display: flex; }
     </style>
 </head>
 <body class="bg-slate-50 antialiased min-h-screen pb-32 text-slate-600">
@@ -93,6 +144,11 @@ $scoreLabels = ['Tidak Ada', 'Kurang', 'Cukup', 'Baik', 'Sangat Baik'];
                         <span class="text-blue-600"><?= htmlspecialchars($s['grade']) ?></span> ·
                         <?= htmlspecialchars($s['school']) ?>
                     </p>
+                </div>
+                <!-- Auto-save indicator -->
+                <div id="autosaveBar" class="state-idle hidden md:flex" aria-live="polite" aria-label="Status penyimpanan otomatis">
+                    <span class="dot"></span>
+                    <span id="autosaveText">Siap</span>
                 </div>
                 <!-- Save button mobile -->
                 <button type="button"
@@ -129,6 +185,20 @@ $scoreLabels = ['Tidak Ada', 'Kurang', 'Cukup', 'Baik', 'Sangat Baik'];
             </div>
         </div>
     </header>
+
+    <!-- Session Expired Overlay -->
+    <div id="sessionExpiredOverlay" role="alertdialog" aria-modal="true" aria-labelledby="sessionExpiredTitle">
+        <div class="bg-white rounded-3xl p-8 max-w-sm w-full mx-4 text-center shadow-2xl">
+            <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <i data-lucide="lock" class="w-8 h-8 text-red-500"></i>
+            </div>
+            <h2 id="sessionExpiredTitle" class="text-lg font-black text-slate-800 mb-2">Sesi Berakhir</h2>
+            <p class="text-sm text-slate-500 font-medium mb-6">Sesi Anda telah berakhir. Jawaban yang sudah Anda pilih <strong class="text-slate-700">telah tersimpan otomatis</strong>. Silakan login kembali untuk melanjutkan.</p>
+            <a href="index.php" class="block w-full py-3 px-6 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl text-sm transition-all active:scale-95">
+                Login Kembali
+            </a>
+        </div>
+    </div>
 
     <!-- Error Banner (jika ada query error) -->
     <?php if (isset($_GET['error'])): ?>
@@ -423,7 +493,117 @@ $scoreLabels = ['Tidak Ada', 'Kurang', 'Cukup', 'Baik', 'Sangat Baik'];
         });
 
         const TOTAL_QUESTIONS = 27; // 15 anak + 12 orangtua
-        let formDirty = false;
+        const STUDENT_ID      = <?= (int)$student_id ?>;
+        let formDirty         = false;
+        let saveQueue         = Promise.resolve(); // Antrian save serial
+        let notesDebounceTimer = {};
+
+        // ── Auto-save Indicator ──────────────────────────────────────
+        const autosaveBar  = document.getElementById('autosaveBar');
+        const autosaveText = document.getElementById('autosaveText');
+
+        function setAutoSaveState(state, msg) {
+            if (!autosaveBar) return;
+            autosaveBar.classList.remove('state-idle','state-saving','state-saved','state-error','hidden');
+            autosaveBar.classList.add('state-' + state);
+            autosaveText.textContent = msg;
+        }
+
+        // ── Auto-Save: kirim 1 skor ke autosave.php ──────────────────
+        function autoSaveScore(questionId, score, cardEl) {
+            setAutoSaveState('saving', 'Menyimpan...');
+
+            const body = new URLSearchParams({
+                student_id:  STUDENT_ID,
+                question_id: questionId,
+                score:       score
+            });
+
+            saveQueue = saveQueue.then(() =>
+                fetch('autosave.php', { method: 'POST', body, credentials: 'same-origin' })
+                    .then(r => {
+                        if (r.status === 401) { showSessionExpired(); return; }
+                        return r.json();
+                    })
+                    .then(data => {
+                        if (!data) return;
+                        if (data.ok) {
+                            setAutoSaveState('saved', '✓ Tersimpan');
+                            if (cardEl) {
+                                cardEl.classList.add('card-saved-flash');
+                                cardEl.addEventListener('animationend', () =>
+                                    cardEl.classList.remove('card-saved-flash'), { once: true });
+                            }
+                            // Update skor total dari server response
+                            if (data.grandTotal !== undefined) {
+                                document.getElementById('totalDisplay').innerHTML =
+                                    data.grandTotal + ' <span class="text-xs font-bold text-slate-300">/108</span>';
+                            }
+                            // Kembali ke idle setelah 2.5 detik
+                            setTimeout(() => setAutoSaveState('idle', 'Siap'), 2500);
+                        } else {
+                            setAutoSaveState('error', '✗ Gagal menyimpan');
+                        }
+                    })
+                    .catch(() => setAutoSaveState('error', '✗ Koneksi gagal'))
+            );
+        }
+
+        // ── Auto-Save: notes (debounce 1.5 detik) ────────────────────
+        function autoSaveNotes(fieldName, value) {
+            clearTimeout(notesDebounceTimer[fieldName]);
+            setAutoSaveState('saving', 'Menyimpan catatan...');
+
+            notesDebounceTimer[fieldName] = setTimeout(() => {
+                const body = new URLSearchParams({
+                    student_id: STUDENT_ID,
+                    field:      fieldName,
+                    value:      value
+                });
+
+                fetch('autosave.php', { method: 'POST', body, credentials: 'same-origin' })
+                    .then(r => {
+                        if (r.status === 401) { showSessionExpired(); return; }
+                        return r.json();
+                    })
+                    .then(data => {
+                        if (!data) return;
+                        if (data.ok) {
+                            setAutoSaveState('saved', '✓ Catatan tersimpan');
+                            setTimeout(() => setAutoSaveState('idle', 'Siap'), 2500);
+                        } else {
+                            setAutoSaveState('error', '✗ Gagal menyimpan catatan');
+                        }
+                    })
+                    .catch(() => setAutoSaveState('error', '✗ Koneksi gagal'));
+            }, 1500);
+        }
+
+        // ── Session Expired Handler ──────────────────────────────────
+        function showSessionExpired() {
+            const overlay = document.getElementById('sessionExpiredOverlay');
+            if (overlay) {
+                overlay.classList.add('show');
+                // Init icon di dalam overlay
+                if (typeof lucide !== 'undefined') lucide.createIcons();
+                formDirty = false; // Prevent beforeunload
+            }
+        }
+
+        // ── Heartbeat Ping (setiap 4 menit) ──────────────────────────
+        function pingSession() {
+            fetch('ping.php', { method: 'GET', credentials: 'same-origin', cache: 'no-store' })
+                .then(r => {
+                    if (r.status === 401) showSessionExpired();
+                })
+                .catch(() => { /* Ignore network blip, akan coba lagi */ });
+        }
+        // Ping pertama setelah 1 menit, lalu setiap 4 menit
+        setTimeout(() => {
+            pingSession();
+            setInterval(pingSession, 4 * 60 * 1000);
+        }, 60 * 1000);
+
 
         // ── Progress & Total Score ──────────────────────────────────
         function updateStats() {
@@ -456,15 +636,18 @@ $scoreLabels = ['Tidak Ada', 'Kurang', 'Cukup', 'Baik', 'Sangat Baik'];
             input.addEventListener('change', () => {
                 updateStats();
                 formDirty = true;
+
                 // Hapus highlight error jika sudah dipilih
-                const card = document.getElementById('card-' + input.name.replace('scores[','').replace(']',''));
-                if (card) {
-                    card.classList.remove('ring-2', 'ring-red-400', 'bg-red-50');
-                }
+                const qId = input.name.replace('scores[','').replace(']','');
+                const card = document.getElementById('card-' + qId);
+                if (card) card.classList.remove('ring-2', 'ring-red-400', 'bg-red-50');
+
+                // ── AUTO-SAVE: kirim langsung ke server ──
+                autoSaveScore(qId, input.value, card);
             });
         });
 
-        // Textarea dirty tracking & character counter
+        // Textarea: counter + auto-save notes (debounce)
         ['child_notes', 'parent_notes'].forEach(id => {
             const el = document.getElementById(id);
             const countEl = document.getElementById(id === 'child_notes' ? 'childNotesCount' : 'parentNotesCount');
@@ -474,6 +657,9 @@ $scoreLabels = ['Tidak Ada', 'Kurang', 'Cukup', 'Baik', 'Sangat Baik'];
                     countEl.textContent = el.value.length + '/1000 karakter';
                     countEl.className = 'text-xs font-medium ' +
                         (el.value.length >= 950 ? 'text-red-500' : 'text-slate-400');
+
+                    // ── AUTO-SAVE notes (debounce 1.5 detik) ──
+                    autoSaveNotes(id, el.value);
                 });
             }
         });
@@ -571,8 +757,12 @@ $scoreLabels = ['Tidak Ada', 'Kurang', 'Cukup', 'Baik', 'Sangat Baik'];
         });
 
         // Klik link "Kembali" — bypass beforeunload setelah konfirmasi
+        // Kecuali link di dalam overlay session expired
         document.querySelectorAll('a[href]').forEach(link => {
             link.addEventListener('click', (e) => {
+                // Jangan hadang link di dalam session expired overlay
+                if (link.closest('#sessionExpiredOverlay')) return;
+
                 if (formDirty) {
                     const ok = confirm('Ada perubahan yang belum disimpan. Yakin ingin kembali?');
                     if (!ok) e.preventDefault();

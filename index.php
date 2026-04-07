@@ -1,9 +1,7 @@
 <?php
 // index.php - Clean Light Edition
 require 'config.php';
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+require 'auth.php'; // Gunakan auth.php agar session lifetime 8 jam konsisten
 
 $error = '';
 

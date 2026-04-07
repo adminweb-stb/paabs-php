@@ -1,7 +1,26 @@
 <?php
-// auth.php — Enhanced: proper redirect instead of die()
+// auth.php — Enhanced: session persistence (8 jam) + security
 if (session_status() === PHP_SESSION_NONE) {
+    // Set session lifetime 8 jam (28800 detik)
+    $sessionLifetime = 28800;
+    ini_set('session.gc_maxlifetime', $sessionLifetime);
+    ini_set('session.cookie_lifetime', $sessionLifetime);
+
+    // Konfigurasi cookie session yang aman
+    session_set_cookie_params([
+        'lifetime' => $sessionLifetime,
+        'path'     => '/',
+        'secure'   => false,      // Ganti true jika pakai HTTPS
+        'httponly' => true,        // Cegah akses JavaScript ke cookie session
+        'samesite' => 'Lax'       // Proteksi CSRF dasar
+    ]);
+
     session_start();
+
+    // Perpanjang masa session setiap request (sliding expiration)
+    if (isset($_SESSION['user'])) {
+        $_SESSION['_last_activity'] = time();
+    }
 }
 
 function checkRole($allowedRoles) {
