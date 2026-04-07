@@ -1,0 +1,13 @@
+# Nonaktifkan directory listing (Mencegah eksplorasi folder)
+Options -Indexes
+
+# Lindungi file-file sensitif, termasuk script utilitas dan data statis
+<FilesMatch "\.(htaccess|htpasswd|ini|log|sh|ps1|csv|json|md|sql)$">
+    Require all denied
+</FilesMatch>
+
+# Blokir akses ke folder node_modules
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^node_modules/ - [F,L]
+</IfModule>
